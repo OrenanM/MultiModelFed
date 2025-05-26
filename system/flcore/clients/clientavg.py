@@ -9,10 +9,10 @@ class clientAVG(Client):
     def __init__(self, args, id, train_samples, test_samples, **kwargs):
         super().__init__(args, id, train_samples, test_samples, **kwargs)
 
-    def train(self):
-        trainloader = self.load_train_data()
+    def train(self, me):
+        trainloader = self.load_train_data(me)
         # self.model.to(self.device)
-        self.model.train()
+        self.models[me].train()
         
         start_time = time.time()
 
@@ -29,11 +29,11 @@ class clientAVG(Client):
                 y = y.to(self.device)
                 if self.train_slow:
                     time.sleep(0.1 * np.abs(np.random.rand()))
-                output = self.model(x)
-                loss = self.loss(output, y)
-                self.optimizer.zero_grad()
+                output = self.models[me](x)
+                loss = self.losses[me](output, y)
+                self.optimizers[me].zero_grad()
                 loss.backward()
-                self.optimizer.step()
+                self.optimizers[me].step()
 
         # self.model.cpu()
 

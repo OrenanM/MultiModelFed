@@ -14,13 +14,13 @@ class Server(object):
         # Set up the main attributes
         self.args = args
         self.device = args.device
-        self.dataset = args.dataset
+        self.datasets = args.datasets
         self.num_classes = args.num_classes
         self.global_rounds = args.global_rounds
         self.local_epochs = args.local_epochs
-        self.batch_size = args.batch_size
+        self.batch_sizes = args.batch_sizes
         self.learning_rate = args.local_learning_rate
-        self.global_model = copy.deepcopy(args.model)
+        self.global_models = copy.deepcopy(args.models)
         self.num_clients = args.num_clients
         self.join_ratio = args.join_ratio
         self.random_join_ratio = args.random_join_ratio
@@ -44,9 +44,11 @@ class Server(object):
         self.uploaded_ids = []
         self.uploaded_models = []
 
-        self.rs_test_acc = []
-        self.rs_test_auc = []
-        self.rs_train_loss = []
+        self.ME = len(self.datasets)
+
+        self.rs_test_acc = [[] for i in range(self.ME)]
+        self.rs_test_auc = [[] for i in range(self.ME)]
+        self.rs_train_loss = [[] for i in range(self.ME)]
 
         self.times = times
         self.eval_gap = args.eval_gap
@@ -62,17 +64,70 @@ class Server(object):
         self.new_clients = []
         self.eval_new_clients = False
         self.fine_tuning_epoch_new = args.fine_tuning_epoch_new
+        
+        # Create Dataset
+        self.balance = args.balance
+        self.noniid = args.noniid
+        self.partition_data = args.partition_data
+
+        # Concept Drift
+        self.rounds_concept_drift = args.rounds_concept_drift
+        self.new_alpha = args.new_alpha
+        self.dataset_concept_drift = args.dataset_concept_drift
+
+        # Label Shift
+        self.rounds_label_shift = args.rounds_label_shift
+        self.dataset_label_shift = args.dataset_label_shift
+        self.replace_labels = args.replace_labels
+        self.initial_alpha = args.initial_alpha
+
+        self.create_new_distribution(alpha=self.initial_alpha)
+
+    def create_new_distribution(self, alpha=None):
+        print('========= CONCEPT DRIFT =========')
+        if alpha is None:
+            alpha = self.new_alpha[0]
+            # remove alpha da lista de alphas
+            self.new_alpha.remove(self.new_alpha[0])
+
+        # Cria distribução com novo alpha
+        os.system(f'cd ../dataset && python generate_{self.dataset_concept_drift}.py \
+                  {self.noniid} {self.balance} {self.partition_data} {alpha}')
+ 
+        
+
+    def shift_labels(self):
+        # troca as labels de todos os clientes
+        print('========= SHIFT LABEL =========')
+        print(self.replace_labels)
+        for client in self.clients:
+            for rl in self.replace_labels:
+                client.label_shift(self.dataset_label_shift, rl[0], rl[1])
 
     def set_clients(self, clientObj):
         for i, train_slow, send_slow in zip(range(self.num_clients), self.train_slow_clients, self.send_slow_clients):
-            train_data = read_client_data(self.dataset, i, is_train=True, few_shot=self.few_shot)
-            test_data = read_client_data(self.dataset, i, is_train=False, few_shot=self.few_shot)
+            train_data = []
+            test_data = []
+
+            for me in range(self.ME):
+                train = read_client_data(self.datasets[me], i, is_train=True, few_shot=self.few_shot)
+                test = read_client_data(self.datasets[me], i, is_train=False, few_shot=self.few_shot)
+
+                train_data.append(train)
+                test_data.append(test)
+            train_samples = []
+            test_samples = []
+
+            for train, test in zip(train_data, test_data):
+                train_samples.append(len(train))
+                test_samples.append(len(test_samples))
+
             client = clientObj(self.args, 
-                            id=i, 
-                            train_samples=len(train_data), 
-                            test_samples=len(test_data), 
-                            train_slow=train_slow, 
-                            send_slow=send_slow)
+                        id=i, 
+                        train_samples=train_samples, 
+                        test_samples=test_samples, 
+                        train_slow=train_slow, 
+                        send_slow=send_slow)
             self.clients.append(client)
 
     # random select slow clients
@@ -97,91 +152,89 @@ class Server(object):
         else:
             self.current_num_join_clients = self.num_join_clients
         selected_clients = list(np.random.choice(self.clients, self.current_num_join_clients, replace=False))
-
+        selected_clients = np.array_split(selected_clients, self.ME)
         return selected_clients
 
-    def send_models(self):
+    def send_models(self, me):
         assert (len(self.clients) > 0)
 
         for client in self.clients:
             start_time = time.time()
             
-            client.set_parameters(self.global_model)
+            client.set_parameters(self.global_models[me], me)
 
             client.send_time_cost['num_rounds'] += 1
             client.send_time_cost['total_cost'] += 2 * (time.time() - start_time)
 
-    def receive_models(self):
-        assert (len(self.selected_clients) > 0)
-
-        active_clients = random.sample(
-            self.selected_clients, int((1-self.client_drop_rate) * self.current_num_join_clients))
+    def receive_models(self, me):
+        assert (len(self.selected_clients[me]) > 0)
 
         self.uploaded_ids = []
         self.uploaded_weights = []
         self.uploaded_models = []
         tot_samples = 0
-        for client in active_clients:
+        for client in self.selected_clients[me]:
             try:
                 client_time_cost = client.train_time_cost['total_cost'] / client.train_time_cost['num_rounds'] + \
                         client.send_time_cost['total_cost'] / client.send_time_cost['num_rounds']
             except ZeroDivisionError:
                 client_time_cost = 0
             if client_time_cost <= self.time_threthold:
-                tot_samples += client.train_samples
+                tot_samples += client.train_samples[me]
                 self.uploaded_ids.append(client.id)
-                self.uploaded_weights.append(client.train_samples)
-                self.uploaded_models.append(client.model)
+                self.uploaded_weights.append(client.train_samples[me])
+                self.uploaded_models.append(client.models[me])
         for i, w in enumerate(self.uploaded_weights):
             self.uploaded_weights[i] = w / tot_samples
 
-    def aggregate_parameters(self):
+    def aggregate_parameters(self, me):
         assert (len(self.uploaded_models) > 0)
 
-        self.global_model = copy.deepcopy(self.uploaded_models[0])
-        for param in self.global_model.parameters():
+        self.global_models[me] = copy.deepcopy(self.uploaded_models[0])
+        for param in self.global_models[me].parameters():
             param.data.zero_()
             
         for w, client_model in zip(self.uploaded_weights, self.uploaded_models):
-            self.add_parameters(w, client_model)
+            self.add_parameters(w, client_model, me)
 
-    def add_parameters(self, w, client_model):
-        for server_param, client_param in zip(self.global_model.parameters(), client_model.parameters()):
+    def add_parameters(self, w, client_model, me):
+        for server_param, client_param in zip(self.global_models[me].parameters(), client_model.parameters()):
             server_param.data += client_param.data.clone() * w
 
-    def save_global_model(self):
-        model_path = os.path.join("models", self.dataset)
+    def save_global_model(self, me):
+        model_path = os.path.join("models", self.datasets[me])
         if not os.path.exists(model_path):
             os.makedirs(model_path)
         model_path = os.path.join(model_path, self.algorithm + "_server" + ".pt")
-        torch.save(self.global_model, model_path)
+        torch.save(self.global_models[me], model_path)
 
     def load_model(self):
-        model_path = os.path.join("models", self.dataset)
+        model_path = os.path.join("models", self.datasets)
         model_path = os.path.join(model_path, self.algorithm + "_server" + ".pt")
         assert (os.path.exists(model_path))
-        self.global_model = torch.load(model_path)
+        self.global_models = torch.load(model_path)
 
     def model_exists(self):
-        model_path = os.path.join("models", self.dataset)
+        model_path = os.path.join("models", self.datasets)
         model_path = os.path.join(model_path, self.algorithm + "_server" + ".pt")
         return os.path.exists(model_path)
         
-    def save_results(self):
-        algo = self.dataset + "_" + self.algorithm
+    def save_results(self, me):
+        algo = self.datasets[me] + "_" + self.algorithm
         result_path = "../results/"
+
         if not os.path.exists(result_path):
             os.makedirs(result_path)
 
-        if (len(self.rs_test_acc)):
+        if (len(self.rs_test_acc[me])):
             algo = algo + "_" + self.goal + "_" + str(self.times)
             file_path = result_path + "{}.h5".format(algo)
             print("File path: " + file_path)
 
             with h5py.File(file_path, 'w') as hf:
-                hf.create_dataset('rs_test_acc', data=self.rs_test_acc)
-                hf.create_dataset('rs_test_auc', data=self.rs_test_auc)
-                hf.create_dataset('rs_train_loss', data=self.rs_train_loss)
+                hf.create_dataset('rs_test_acc', data=self.rs_test_acc[me])
+                hf.create_dataset('rs_test_auc', data=self.rs_test_auc[me])
+                hf.create_dataset('rs_train_loss', data=self.rs_train_loss[me])
 
     def save_item(self, item, item_name):
         if not os.path.exists(self.save_folder_name):
@@ -191,7 +244,7 @@ class Server(object):
     def load_item(self, item_name):
         return torch.load(os.path.join(self.save_folder_name, "server_" + item_name + ".pt"))
 
-    def test_metrics(self):
+    def test_metrics(self, me):
         if self.eval_new_clients and self.num_new_clients > 0:
             self.fine_tuning_new_clients()
             return self.test_metrics_new_clients()
@@ -200,7 +253,7 @@ class Server(object):
         tot_correct = []
         tot_auc = []
         for c in self.clients:
-            ct, ns, auc = c.test_metrics()
+            ct, ns, auc = c.test_metrics(me)
             tot_correct.append(ct*1.0)
             tot_auc.append(auc*ns)
             num_samples.append(ns)
@@ -209,14 +262,14 @@ class Server(object):
 
         return ids, num_samples, tot_correct, tot_auc
 
-    def train_metrics(self):
+    def train_metrics(self, me):
         if self.eval_new_clients and self.num_new_clients > 0:
             return [0], [1], [0]
         
         num_samples = []
         losses = []
         for c in self.clients:
-            cl, ns = c.train_metrics()
+            cl, ns = c.train_metrics(me)
             num_samples.append(ns)
             losses.append(cl*1.0)
 
@@ -225,9 +278,9 @@ class Server(object):
         return ids, num_samples, losses
 
     # evaluate selected clients
-    def evaluate(self, acc=None, loss=None):
-        stats = self.test_metrics()
-        stats_train = self.train_metrics()
+    def evaluate(self, me, acc=None, loss=None):
+        stats = self.test_metrics(me)
+        stats_train = self.train_metrics(me)
 
         test_acc = sum(stats[2])*1.0 / sum(stats[1])
         test_auc = sum(stats[3])*1.0 / sum(stats[1])
@@ -236,12 +289,12 @@ class Server(object):
         aucs = [a / n for a, n in zip(stats[3], stats[1])]
         
         if acc == None:
-            self.rs_test_acc.append(test_acc)
+            self.rs_test_acc[me].append(test_acc)
         else:
             acc.append(test_acc)
         
         if loss == None:
-            self.rs_train_loss.append(train_loss)
+            self.rs_train_loss[me].append(train_loss)
         else:
             loss.append(train_loss)
 
@@ -289,7 +342,7 @@ class Server(object):
         for cid, client_model in zip(self.uploaded_ids, self.uploaded_models):
             client_model.eval()
             origin_grad = []
-            for gp, pp in zip(self.global_model.parameters(), client_model.parameters()):
+            for gp, pp in zip(self.global_models.parameters(), client_model.parameters()):
                 origin_grad.append(gp.data - pp.data)
 
             target_inputs = []
@@ -323,8 +376,8 @@ class Server(object):
 
     def set_new_clients(self, clientObj):
         for i in range(self.num_clients, self.num_clients + self.num_new_clients):
-            train_data = read_client_data(self.dataset, i, is_train=True, few_shot=self.few_shot)
-            test_data = read_client_data(self.dataset, i, is_train=False, few_shot=self.few_shot)
+            train_data = read_client_data(self.datasets, i, is_train=True, few_shot=self.few_shot)
+            test_data = read_client_data(self.datasets, i, is_train=False, few_shot=self.few_shot)
             client = clientObj(self.args, 
                             id=i, 
                             train_samples=len(train_data), 
@@ -336,7 +389,7 @@ class Server(object):
     # fine-tuning on new clients
     def fine_tuning_new_clients(self):
         for client in self.new_clients:
-            client.set_parameters(self.global_model)
+            client.set_parameters(self.global_models)
             opt = torch.optim.SGD(client.model.parameters(), lr=self.learning_rate)
             CEloss = torch.nn.CrossEntropyLoss()
             trainloader = client.load_train_data()
