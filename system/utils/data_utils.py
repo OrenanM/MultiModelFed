@@ -15,21 +15,6 @@ def read_data(dataset, idx, is_train=True):
         data = np.load(f, allow_pickle=True)['data'].tolist()
     return data
 
-def label_shift_client_data(dataset, idx, is_train=True, value1=8, value2=9):
-    if is_train:
-        data_dir = os.path.join('../dataset', dataset, 'train/')
-    else:
-        data_dir = os.path.join('../dataset', dataset, 'test/')
-
-    file = data_dir + str(idx) + '.npz'
-    with open(file, 'rb') as f:
-        data = np.load(f, allow_pickle=True)['data'].tolist()
-
-    data['y'] = np.where(data['y'] == value1, value2,
-             np.where(data['y'] == value2, value1, data['y']))
-    np.savez(file, data=data)
-    return data
-
 def read_client_data(dataset, idx, is_train=True, few_shot=0):
     data = read_data(dataset, idx, is_train)
     if "News" in dataset:

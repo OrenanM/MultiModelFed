@@ -23,8 +23,16 @@ class FedAvg(Server):
         for i in range(self.global_rounds+1):
 
             if i in self.rounds_concept_drift:
-                self.create_new_distribution()
+                me_dataset = self.datasets.index(self.dataset_concept_drift)
+                if self.monitor_acc:
+                    self.datasets_rate[me_dataset] *= 2
+                    self.datasets_rate = self.datasets_rate / sum(self.datasets_rate)
+                self.concept_drift()
             if i in self.rounds_label_shift:
+                me_dataset = self.datasets.index(self.dataset_label_shift)
+                if self.monitor_acc:
+                    self.datasets_rate[me_dataset] *= 2
+                    self.datasets_rate = self.datasets_rate / sum(self.datasets_rate)
                 self.shift_labels()
 
             s_t = time.time()

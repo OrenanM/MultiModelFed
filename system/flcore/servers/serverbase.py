@@ -7,7 +7,7 @@ import time
 import random
 from utils.data_utils import read_client_data
 from utils.dlg import DLG
-
+import sys
 
 class Server(object):
     def __init__(self, args, times):
@@ -45,6 +45,7 @@ class Server(object):
         self.uploaded_models = []
 
         self.ME = len(self.datasets)
+        self.datasets_rate = np.array([1/self.ME for _ in range(self.ME)])
 
         self.rs_test_acc = [[] for i in range(self.ME)]
         self.rs_test_auc = [[] for i in range(self.ME)]
@@ -69,23 +70,27 @@ class Server(object):
         self.balance = args.balance
         self.noniid = args.noniid
         self.partition_data = args.partition_data
+        self.initial_alpha = args.initial_alpha
 
         # Concept Drift
-        self.rounds_concept_drift = args.rounds_concept_drift
-        self.new_alpha = args.new_alpha
+        self.rounds_concept_drift = args.rounds_concept_drift[:]
+        self.new_alpha = args.new_alpha[:]
         self.dataset_concept_drift = args.dataset_concept_drift
 
         # Label Shift
-        self.rounds_label_shift = args.rounds_label_shift
+        self.rounds_label_shift = args.rounds_label_shift[:]
         self.dataset_label_shift = args.dataset_label_shift
-        self.replace_labels = args.replace_labels
-        self.initial_alpha = args.initial_alpha
+        
+        # Monitor acc
+        self.acc_threthold = args.acc_threthold
+        self.monitor_acc = args.monitor_acc
 
-        self.create_new_distribution(alpha=self.initial_alpha)
+        self.concept_drift(alpha=self.initial_alpha)
 
-    def create_new_distribution(self, alpha=None):
-        print('========= CONCEPT DRIFT =========')
+    def concept_drift(self, alpha=None):
+        
         if alpha is None:
+            print('=============== CONCEPT DRIFT ===============')
             alpha = self.new_alpha[0]
             # remove alpha da lista de alphas
             self.new_alpha.remove(self.new_alpha[0])
@@ -93,16 +98,12 @@ class Server(object):
         # Cria distribução com novo alpha
         os.system(f'cd ../dataset && python generate_{self.dataset_concept_drift}.py \
                   {self.noniid} {self.balance} {self.partition_data} {alpha}')
- 
-        
 
     def shift_labels(self):
         # troca as labels de todos os clientes
-        print('========= SHIFT LABEL =========')
-        print(self.replace_labels)
-        for client in self.clients:
-            for rl in self.replace_labels:
-                client.label_shift(self.dataset_label_shift, rl[0], rl[1])
+        print('================ SHIFT LABEL ================ ')
+        os.system(f'cd ../dataset && python generate_{self.dataset_concept_drift}.py \
+                  {self.noniid} {self.balance} {self.partition_data} {self.initial_alpha}')
 
     def set_clients(self, clientObj):
         for i, train_slow, send_slow in zip(range(self.num_clients), self.train_slow_clients, self.send_slow_clients):
@@ -147,13 +148,26 @@ class Server(object):
             self.send_slow_rate)
 
     def select_clients(self):
+        print('*'*60)
+        print(self.monitor_acc)
+        print(self.datasets_rate)
+        print('*'*60)
+
         if self.random_join_ratio:
             self.current_num_join_clients = np.random.choice(range(self.num_join_clients, self.num_clients+1), 1, replace=False)[0]
         else:
             self.current_num_join_clients = self.num_join_clients
         selected_clients = list(np.random.choice(self.clients, self.current_num_join_clients, replace=False))
-        selected_clients = np.array_split(selected_clients, self.ME)
-        return selected_clients
+
+        selected = []
+        for me in range(self.ME):
+            # selection client for eat dataset
+            num_me_select = int(self.current_num_join_clients * self.datasets_rate[me])
+            selected_clients_me = list(np.random.choice(selected_clients, num_me_select, replace=False))
+            selected.append(selected_clients_me)    
+
+            selected_clients = [client for client in selected_clients if client not in selected_clients_me]
+        return selected
 
     def send_models(self, me):
         assert (len(self.clients) > 0)
@@ -235,6 +249,16 @@ class Server(object):
                 hf.create_dataset('rs_test_acc', data=self.rs_test_acc[me])
                 hf.create_dataset('rs_test_auc', data=self.rs_test_auc[me])
                 hf.create_dataset('rs_train_loss', data=self.rs_train_loss[me])
+
+    def monitor_accuracy(self):
+        for me in range(self.ME):
+            if len(self.rs_test_acc[me]) >= 2:
+                difference = self.rs_test_acc[me][-2] - self.rs_test_acc[me][-1] 
+                print(self.rs_test_acc[me])
+                print(difference)
+                if difference > self.acc_threthold:
+                    print('=============== SHIFT DETECTED ===============')
+                    self.datasets_rate[me] *= 2
 
     def save_item(self, item, item_name):
         if not os.path.exists(self.save_folder_name):

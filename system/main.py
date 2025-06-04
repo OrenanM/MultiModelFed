@@ -72,11 +72,12 @@ def run(args):
 
     time_list = []
     reporter = MemReporter()
-    models_name = args.models
+    models_name = args.models[:]
     
     for i in range(args.prev, args.times):
         print(f"\n============= Running time: {i}th =============")
         print("Creating server and clients ...")
+   
         for me, (model_str, dataset) in enumerate(zip(models_name, args.datasets)):
             start = time.time()
 
@@ -547,8 +548,12 @@ if __name__ == "__main__":
     # Label Shift
     parser.add_argument('-rds', '--rounds_label_shift', action='append', type=int, default=[])
     parser.add_argument('-dls', '--dataset_label_shift', type=str)
-    parser.add_argument('-rl', '--replace_labels', nargs=2, type=int, 
-                        action='append')
+    parser.add_argument('-rl', '--replace_labels', nargs=2, type=int, action='append')
+
+    # Monitor Accuracy
+    parser.add_argument('-at', '--acc_threthold', type=float, default=0.1)
+    parser.add_argument('-ma', '--monitor_acc', action='store_true', help='Monitorar acurácia (default: False)')
+
     args = parser.parse_args()
 
     os.environ["CUDA_VISIBLE_DEVICES"] = args.device_id

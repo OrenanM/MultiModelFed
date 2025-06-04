@@ -6,8 +6,7 @@ import os
 from torch.utils.data import DataLoader
 from sklearn.preprocessing import label_binarize
 from sklearn import metrics
-from utils.data_utils import read_client_data, label_shift_client_data
-
+from utils.data_utils import read_client_data
 
 class Client(object):
     """
@@ -62,12 +61,6 @@ class Client(object):
             self.optimizers.append(opt)
             self.losses.append(loss)
         self.learning_rate_decay = args.learning_rate_decay
-
-    def label_shift(self, dataset_shift, value1, value2):
-        label_shift_client_data(dataset_shift, self.id, 
-                                is_train=True, value1=value1, value2=value2)
-        label_shift_client_data(dataset_shift, self.id, 
-                                is_train=False, value1=value1, value2=value2)
 
     def load_train_data(self, me, batch_size=None):
         if batch_size == None:

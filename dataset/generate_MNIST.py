@@ -10,9 +10,8 @@ from utils.dataset_utils import check, separate_data, split_data, save_file
 
 random.seed(1)
 np.random.seed(1)
-num_clients = 100
+num_clients = 20
 dir_path = "MNIST/"
-
 
 # Allocate data to users
 def generate_dataset(dir_path, num_clients, niid, balance, partition, alpha):
