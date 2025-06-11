@@ -38,6 +38,7 @@ class FedAvg(Server):
             s_t = time.time()
             self.selected_clients = self.select_clients()
             print(f"\n-------------Round number: {i}-------------")
+
             for me in range(self.ME):
                 self.send_models(me)
                 
@@ -53,11 +54,22 @@ class FedAvg(Server):
                     self.call_dlg(i)
                 self.aggregate_parameters(me)
 
+                if self.parameter_ema == 'parameters':
+                    self.calculate_stability_parameters(me)
+ 
+                elif self.parameter_ema == 'loss':
+                    self.calculate_stability_loss(me, round=i)
+                elif self.parameter_ema == 'acc':
+                    self.calculate_stability_acc(me, round=i)
+
             self.Budget.append(time.time() - s_t)
             print('-'*25, 'time cost', '-'*25, self.Budget[-1])
 
             if self.auto_break and self.check_done(acc_lss=[self.rs_test_acc], top_cnt=self.top_cnt):
                 break
+
+            if self.rebalance_ema:
+                self.models_rebalance_ema()
 
         print("\nBest accuracy.")
         # self.print_(max(self.rs_test_acc), max(

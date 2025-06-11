@@ -85,10 +85,72 @@ class Server(object):
         self.acc_threthold = args.acc_threthold
         self.monitor_acc = args.monitor_acc
 
+        # EMA
+        self.alpha_ema = args.alpha_ema
+        self.stability_global = [0 for _ in range(self.ME)]
+        self.parameter_ema = args.parameter_ema # parameters, loss or acc
+        if self.parameter_ema == 'parameters':
+            self.stability_layers = []
+            self.calculte_first_value_ema_parameters()
+        self.rebalance_ema = args.rebalance_ema
+
+        # first distribution
         self.concept_drift(alpha=self.initial_alpha)
 
-    def concept_drift(self, alpha=None):
+    def calculte_first_value_ema_parameters(self):
+        # for each model calculate the initial mean value for the EMA for each layer
+ 
+        for me in range(self.ME): 
+            stability = {} # dict mean parameters
+            for name, paramaters in self.global_models[me].named_parameters():
+                stability[name] = torch.mean(paramaters).item()
+            
+            # average of averages (average of the model) 
+            mean_stability = torch.abs(torch.mean(torch.tensor(list(stability.values()))))
+            
+            # add values in list
+            self.stability_layers.append(stability)
+            self.stability_global[me] = mean_stability.item()
+
+    def calculate_stability_parameters(self, me):
+
+        ema_previous = self.stability_layers[me]
+
+        for name, paramaters in self.global_models[me].named_parameters():
+            ema = ema_previous[name]
+            mean_paramaters = torch.mean(paramaters)
+
+            new_ema = self.alpha_ema * mean_paramaters + (1-self.alpha_ema) * ema
+            self.stability_layers[me][name] = new_ema.item()
+
+        mean_stability = torch.abs(torch.mean(torch.tensor(list(self.stability_layers[me].values())))).item()
+        print(self.stability_global[me])
+        self.stability_global[me] = mean_stability
+        print(self.stability_global[me])
+    
+    def calculate_stability_loss(self, me, round):
+        if round == 0:
+            self.stability_global[me] = self.rs_train_loss[me][-1]
+            return
+        ema = self.stability_global[me]
+        new_ema = self.alpha_ema * self.rs_train_loss[me][-1] + (1-self.alpha_ema) * ema
         
+        self.stability_global[me] = new_ema
+
+    def calculate_stability_acc(self, me, round):
+        if round == 0:
+            self.stability_global[me] = self.rs_test_acc[me][-1]
+            return
+        ema = self.stability_global[me]
+        new_ema = self.alpha_ema * self.rs_test_acc[me][-1] + (1-self.alpha_ema) * ema
+
+        self.stability_global[me] = new_ema
+
+    def models_rebalance_ema(self):
+        for me in range(self.ME):
+            self.datasets_rate[me] = self.stability_global[me]/sum(self.stability_global)
+
+    def concept_drift(self, alpha=None):
         if alpha is None:
             print('=============== CONCEPT DRIFT ===============')
             alpha = self.new_alpha[0]
@@ -148,11 +210,9 @@ class Server(object):
             self.send_slow_rate)
 
     def select_clients(self):
-        print('*'*60)
-        print(self.monitor_acc)
+        print('*'*40)
         print(self.datasets_rate)
-        print('*'*60)
-
+        print('*'*40)
         if self.random_join_ratio:
             self.current_num_join_clients = np.random.choice(range(self.num_join_clients, self.num_clients+1), 1, replace=False)[0]
         else:
@@ -210,6 +270,7 @@ class Server(object):
             
         for w, client_model in zip(self.uploaded_weights, self.uploaded_models):
             self.add_parameters(w, client_model, me)
+        
 
     def add_parameters(self, w, client_model, me):
         for server_param, client_param in zip(self.global_models[me].parameters(), client_model.parameters()):

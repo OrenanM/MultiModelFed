@@ -554,6 +554,11 @@ if __name__ == "__main__":
     parser.add_argument('-at', '--acc_threthold', type=float, default=0.1)
     parser.add_argument('-ma', '--monitor_acc', action='store_true', help='Monitorar acurácia (default: False)')
 
+    # EMA
+    parser.add_argument('-ae', '--alpha_ema', type=float, default=0.9)
+    parser.add_argument('-pe', '--parameter_ema', type=str, default=None)
+    parser.add_argument('-re', '--rebalance_ema', action='store_true', help='rebalancear de acordo com o EMA')
+
     args = parser.parse_args()
 
     os.environ["CUDA_VISIBLE_DEVICES"] = args.device_id
